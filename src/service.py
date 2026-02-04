@@ -10,15 +10,20 @@ from jinja2 import Environment, FileSystemLoader
 from openai import AsyncClient
 from PIL import Image
 
-from settings import settings
 from src.models import AppResultsModel, ImageJudgeResponse, UsageMetadata
-from src.utils import standardize_name
+from src.settings import settings
 
 SEMAPHORE_VAL = 5
 IMG_GEN_PROMPT_PATH = Path("prompts/img_gen.jinja")
 JUDGE_PROMPT_PATH = Path("prompts/img_judge.jinja")
 
 logger = logging.getLogger(__name__)
+
+
+def standardize_name(name: str) -> str:
+    if "/" in name:
+        return name.replace("/", "__")
+    return name
 
 
 class ImageGenPipelineClient:

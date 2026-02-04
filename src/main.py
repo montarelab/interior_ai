@@ -11,11 +11,11 @@ from fastapi import Depends, FastAPI, File, Form, UploadFile
 
 from src.models import EvalConfigPayload
 from src.service import ImageGenPipelineClient
-from src.utils import get_image_path, get_prompt_path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+DATASET_PATH = Path("dataset")
 
 app = FastAPI()
 
@@ -33,6 +33,14 @@ ImageGenPipelineDep = Annotated[
 ]
 
 
+def get_prompt_path(task: str, prompt_version: int) -> Path:
+    return DATASET_PATH / task / f"prompt_v{prompt_version}.md"
+
+
+def get_image_path(task: str) -> Path:
+    return DATASET_PATH / task / "image.png"
+
+
 @app.post("/generate")
 async def generate(
     pipeline: ImageGenPipelineDep,
@@ -41,6 +49,7 @@ async def generate(
 ):
     """Generate POST endpoint. Takes string prompt and image and generates an image."""
     try:
+        logger.info(f"Geneate request.")
         job_dt = datetime.now().isoformat()
         job_id = uuid4()
         job_path = Path("jobs") / f"{job_dt}_{job_id}"
@@ -52,6 +61,11 @@ async def generate(
         async with aiofiles.open(src_img_path, "wb") as f:
             await f.write(contents)
 
+        async with aiofiles.open(job_path / "user_prompt.md", "wb") as f:
+            await f.write(prompt)
+
+        logger.info(f"Saved request details.")
+
         result_dir_path = job_path / "result"
         result_dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -61,7 +75,7 @@ async def generate(
             image_path=src_img_path,
             result_dir_path=result_dir_path,
         )
-        return {"status": "success", "job_path": job_path}
+        return {"status": "success", "job_path": job_path.expanduser().resolve()}
     except Exception:
         return {"status": "failed"}
 
@@ -118,6 +132,10 @@ async def evaluate(pipeline: ImageGenPipelineDep, payload: EvalConfigPayload):
 
         logger.info(f"Total tasks: {product_len}")
         asyncio.create_task(run_eval(job_path=job_path, tasks=tasks))
-        return {"status": "started", "total_tasks": product_len, "job_path": job_path}
+        return {
+            "status": "started",
+            "total_tasks": product_len,
+            "job_path": job_path.expanduser().resolve(),
+        }
     except Exception:
         return {"status": "failed"}
