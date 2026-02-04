@@ -58,6 +58,22 @@ class ImageJudgeResponse(BaseModel):
     )
 
 
+class PromptEnhancementResponse(BaseModel):
+    """Prompt enhancement response."""
+
+    improved_prompt: str = Field(
+        description="Enhanced user's prompt that will improve image generation."
+    )
+    images: list[str] = Field(
+        description="""
+A list of image description the model needs to generate for a client. 
+One of the strategies is an image per a room in appartments. 
+Do not do more than 5 images. 
+Add an additional description for each of them.
+"""
+    )
+
+
 class UsageMetadata(BaseModel):
     """Usage metadata model that holds token usage information from the LLM requests."""
 
@@ -90,7 +106,8 @@ class UsageMetadata(BaseModel):
 class AppResultsModel(BaseModel):
     """Structured response of the one generate run."""
 
-    usage: UsageMetadata
-    img_gen_duration_sec: float
+    usages: list[UsageMetadata]
+    plan_gen_duration_sec: float
+    img_gen_duration_sec: list[float]
     img_eval_duration_sec: float
     judge: ImageJudgeResponse
