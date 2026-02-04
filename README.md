@@ -12,7 +12,7 @@ We pass input - list of pairs, where each pair is a reference image + text prefe
 
 To run:
 ```
-uv run uvicorn main:app --host localhost --port 5000
+uv run uvicorn src.main:app --host localhost --port 5000
 ```
 ## Data requirements
 
