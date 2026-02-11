@@ -1,8 +1,8 @@
 services:
-  interier_gen:
-    container_name: interier_gen
+  interior_gen:
+    container_name: interior_gen
     build: .
-    image: interier_gen:latest
+    image: interior_gen:latest
     env_file: .env
     ports: 
       - 6000:6000

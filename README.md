@@ -1,16 +1,18 @@
 We pass input - list of pairs, where each pair is a reference image + text preferences. The text preferences include room type, budget, and style preset. Output 1..N generated images with metadata we returns notes and estiamted costs.
 
-## Tasks
-- [ ] System Diagram
-- [ ] Data Preparation
-    - [ ] Eval strategy requirements
-    - [ ] Define requirements
-    - [ ] Prompts generation prompt
-    - [ ] Collect images
-- [ ] Jupyter Development
-- [ ] API Development
+To run locally:
 
-To run:
+1. Clone GIT repo 
+
+```
+git clone ...
+```
+
+2. Sync `uv`
+```
+uv sync
+```
+
 ```
 uv run uvicorn src.main:app --host localhost --port 5000
 ```
@@ -42,3 +44,6 @@ Run Docker Compose with build
 ```
 docker compose up
 ```
+
+Solution Diagram
+<img src="images/diagram.png"/>

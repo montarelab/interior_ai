@@ -52,7 +52,7 @@ class ImageEvalResponse(BaseModel):
         description="Metric that measures how much the generated image corresponds to the prompt given by a user."
     )
     realism_value: StructuredMetric = Field(
-        description="Metric that measures how realistic doing such interier is."
+        description="Metric that measures how realistic doing such interior is."
     )
     satisfaction_value: StructuredMetric = Field(
         description="Metric that measures how much the generated image looks pleasent, aesthetical, and beautiful for living."
