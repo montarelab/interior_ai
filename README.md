@@ -36,8 +36,9 @@ Build Docker Container
 docker compose build
 ```
 
-Run Docker Compose
+
+Run Docker Compose with build
 
 ```
-docker compose run 
+docker compose up
 ```

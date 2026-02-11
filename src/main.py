@@ -9,6 +9,7 @@ from uuid import uuid4
 import aiofiles
 import uvicorn
 from fastapi import Body, FastAPI, File, Form, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.graph import build_graph, init_graph_state
 from src.models import EvalConfigPayload
@@ -20,6 +21,13 @@ logger = logging.getLogger(__name__)
 DATASET_PATH = Path("dataset")
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 bg_tasks_list: list[asyncio.Task] = []
 bg_tasks_lock = threading.Lock()

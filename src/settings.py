@@ -9,7 +9,7 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: Literal["DEBUG", "INFO", "ERROR"] = "INFO"
     HOST: str
-    PORT: str
+    PORT: int
     OPENAI_API_KEY: str
     GEMINI_API_KEY: str | None
     OPENROUTER_API_KEY: str | None

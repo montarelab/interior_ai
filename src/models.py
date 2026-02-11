@@ -1,5 +1,3 @@
-from typing import TypedDict
-
 import litellm
 from google.genai.types import GenerateContentResponseUsageMetadata
 from openai.types.images_response import Usage

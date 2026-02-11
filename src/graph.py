@@ -2,17 +2,14 @@ import asyncio
 import base64
 import json
 import logging
-import mimetypes
 import operator
 import time
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal, TypedDict
 
 import aiofiles
 from google import genai
-from jinja2 import Environment, FileSystemLoader
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Send
 from openai import AsyncClient
@@ -26,26 +23,25 @@ from src.models import (
     UsageMetadata,
 )
 from src.settings import settings
+from src.utils import (
+    compound_usages,
+    img_path_to_data_url,
+    render_template_async,
+    standardize_model_name,
+)
 
 logger = logging.getLogger(__name__)
 
 SEMAPHORE_VAL = 5
-PROMPTS_PATH = Path("prompts")
 EVAL_MODEL = "gpt-5-mini"
 PLAN_MODEL = "gpt-5-mini"
 DEFAULT_IMG_GEN_MODEL = "gpt-image-1-mini"
 
-env = Environment(loader=FileSystemLoader("prompts"))
+
 openai_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
 google_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
 openai_client = AsyncClient(api_key=settings.OPENAI_API_KEY)
 gemini_client = genai.Client()
-
-
-def standardize_name(name: str) -> str:
-    if "/" in name:
-        return name.replace("/", "__")
-    return name
 
 
 class GraphState(TypedDict):
@@ -79,6 +75,13 @@ DEFAULT_GRAPH_STATE = {
 }
 
 
+@dataclass
+class ImgGenResponse:
+    img_base64: str
+    usage: UsageMetadata
+    img_gen_seconds: float
+
+
 def init_graph_state(
     prompt: str, user_image_path: Path, result_path: Path, llm_model: str | None = None
 ) -> GraphState:
@@ -89,28 +92,6 @@ def init_graph_state(
         "result_path": result_path,
         "llm_model": llm_model,
     }
-
-
-async def img_path_to_data_url(img_path: Path) -> str:
-    """Get Base64 from image path by reading the file."""
-    mime_type, _ = mimetypes.guess_type(img_path)
-    if mime_type is None:
-        raise ValueError("Could not determine MIME type")
-
-    async with aiofiles.open(img_path, "rb") as f:
-        content = await f.read()
-        encoded = base64.b64encode(content).decode("utf-8")
-        return f"data:{mime_type};base64,{encoded}"
-
-
-async def render_template_async(template_name: str, **context) -> str:
-    """Asynchronously read prompt template and render with 'context' variables."""
-    template_path = PROMPTS_PATH / template_name
-    async with aiofiles.open(template_path, "r", encoding="utf-8") as f:
-        template_str = await f.read()
-
-    template = env.from_string(template_str)
-    return template.render(**context)
 
 
 async def plan(state: GraphState):
@@ -162,13 +143,6 @@ async def plan(state: GraphState):
     except Exception:
         logger.exception("Error occured during process planning.")
         raise
-
-
-@dataclass
-class ImgGenResponse:
-    img_base64: str
-    usage: UsageMetadata
-    img_gen_seconds: float
 
 
 async def google_img_gen(
@@ -251,7 +225,7 @@ async def image_gen(state: GraphState, gen_mode: Literal["init", "later"]):
 
         result_img_path = (
             state["result_path"]
-            / f"{current_img_descriptor.key}_{standardize_name(model)}.png"
+            / f"{current_img_descriptor.key}_{standardize_model_name(model)}.png"
         )
         async with aiofiles.open(result_img_path, "wb") as f:
             img_bytes = base64.b64decode(response.img_base64)
@@ -310,28 +284,6 @@ async def eval_image(state: GraphState):
     except Exception:
         logger.exception("Error occured during LLM judgement.")
         raise
-
-
-def group_usages(usages: list[UsageMetadata]) -> dict[str, list[UsageMetadata]]:
-    """Group usages by model name."""
-    groups = defaultdict(list)
-    for usage in usages:
-        groups[usage.model].append(usage)
-    return dict(groups)
-
-
-def compound_usages(usages: list[UsageMetadata]) -> list[UsageMetadata]:
-    """Compund usages by model name."""
-    groups = group_usages(usages)
-    return [
-        UsageMetadata(
-            model=model,
-            input_tokens=sum([u.input_tokens for u in model_usages]),
-            output_tokens=sum([u.output_tokens for u in model_usages]),
-            total_tokens=sum([u.total_tokens for u in model_usages]),
-        )
-        for model, model_usages in groups.items()
-    ]
 
 
 async def finalize(state: GraphState):
