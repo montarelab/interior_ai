@@ -89,10 +89,12 @@ async def generate(prompt: str = Form(None), image: UploadFile = File(...)):
                 "user_image_path": src_img_path,
                 "result_path": result_dir_path,
                 "llm_model": "gpt-image-1-mini",
+                "image_descriptors": [],
                 "img_gen_duration_sec": [],
                 "img_eval_duration_sec": [],
                 "token_usages": [],
                 "eval_responses": [],
+                "img_data_url": [],
             }
         )
         return {"status": "success", "job_path": job_path.expanduser().resolve()}

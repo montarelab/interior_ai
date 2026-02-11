@@ -1,3 +1,6 @@
+from typing import TypedDict
+
+import litellm
 from google.genai.types import GenerateContentResponseUsageMetadata
 from openai.types.images_response import Usage
 from pydantic import BaseModel, Field
@@ -40,6 +43,9 @@ class StructuredMetric(BaseModel):
 class ImageEvalResponse(BaseModel):
     """Response to automatic judge of a generated image."""
 
+    image_key: str = Field(
+        description="Key of the image you evaluated, added inside single quotes in user's prompt."
+    )
     reasoning_checklist: str = Field(description="Your reasoning checklist.")
     budget_correspondence: StructuredMetric = Field(
         description="Metric that measures how much the generated image corresponds to the budget given by user."
@@ -58,19 +64,26 @@ class ImageEvalResponse(BaseModel):
     )
 
 
+class ImageDescriptor(BaseModel):
+    """Image description."""
+
+    key: str = Field(
+        "JSON-like short semantic image identifier key 1-3 lowercase joined by '_' words."
+    )
+    description: str = Field("Additional description for the image.")
+
+    def __str__(self):
+        return f"Additional image '{self.key}' description: {self.description}"
+
+
 class PlanResponse(BaseModel):
     """Prompt enhancement response."""
 
     improved_prompt: str = Field(
         description="Enhanced user's prompt that will improve image generation."
     )
-    images: list[str] = Field(
-        description="""
-A list of image description the model needs to generate for a client. 
-One of the strategies is an image per a room in appartments. 
-Do not do more than 5 images. 
-Add an additional description for each of them.
-"""
+    images: list[ImageDescriptor] = Field(
+        description="A list of image description the model needs to generate for a client.  One of the strategies is an image per a room in appartments. Do not do more than 5 images."
     )
 
 
@@ -81,6 +94,28 @@ class UsageMetadata(BaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
+    total_cost_usd: float = 0.0
+
+    def model_post_init(self, context):
+        """Model post initializer method that assigns 'total_cost_usd'."""
+        model_cost: dict = litellm.model_cost.get(self.model, None)
+        if not model_cost:
+            self.total_cost_usd = 0.0
+        else:
+            input_cost_per_token_key = [
+                key for key in model_cost.keys() if "input_cost" in key
+            ][0]
+            output_cost_per_token_key = [
+                key for key in model_cost.keys() if "output_cost" in key
+            ][0]
+
+            self.total_cost_usd = 0.0
+
+            self.total_cost_usd = (
+                self.input_tokens * model_cost[input_cost_per_token_key]
+                + self.output_tokens * model_cost[output_cost_per_token_key]
+            )
+        return super().model_post_init(context)
 
     @classmethod
     def from_google_usage(

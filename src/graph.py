@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import mimetypes
+import operator
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -18,7 +19,13 @@ from langgraph.types import Command, Send
 from openai import AsyncClient
 from PIL import Image
 
-from src.models import AppResultsModel, ImageEvalResponse, PlanResponse, UsageMetadata
+from src.models import (
+    AppResultsModel,
+    ImageDescriptor,
+    ImageEvalResponse,
+    PlanResponse,
+    UsageMetadata,
+)
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -51,18 +58,19 @@ class GraphState(TypedDict):
     enhanced_prompt: str
     user_image_path: Path
     init_image_path: Path
-    images: list[str]
+    image_descriptors: list[ImageDescriptor]
     plan_response: PlanResponse
     plan_gen_duration_sec: float
-    img_gen_duration_sec: Annotated[list[float], list.append]
-    img_eval_duration_sec: Annotated[list[float], list.append]
-    token_usages: Annotated[list[UsageMetadata], list.append]
-    eval_responses: Annotated[list[ImageEvalResponse], list.append]
-    specific_img_details: str
-    img_data_url: str
+    img_gen_duration_sec: Annotated[list[float], operator.add]
+    img_eval_duration_sec: Annotated[list[float], operator.add]
+    token_usages: Annotated[list[UsageMetadata], operator.add]
+    eval_responses: Annotated[list[ImageEvalResponse], operator.add]
+    current_img_descriptor: ImageDescriptor
+    img_data_url: Annotated[list[str], operator.add]
 
 
 async def img_path_to_data_url(img_path: Path) -> str:
+    """Get Base64 from image path by reading the file."""
     mime_type, _ = mimetypes.guess_type(img_path)
     if mime_type is None:
         raise ValueError("Could not determine MIME type")
@@ -74,6 +82,7 @@ async def img_path_to_data_url(img_path: Path) -> str:
 
 
 async def render_template_async(template_name: str, **context) -> str:
+    """Asynchronously read prompt template and render with 'context' variables."""
     template_path = PROMPTS_PATH / template_name
     async with aiofiles.open(template_path, "r", encoding="utf-8") as f:
         template_str = await f.read()
@@ -121,19 +130,16 @@ async def plan(state: GraphState):
             goto="init_image_gen",
             update={
                 "enhanced_prompt": response.output_parsed.improved_prompt,
-                "images": response.output_parsed.images,
+                "image_descriptors": response.output_parsed.images,
                 "plan_gen_duration_sec": plan_gen_seconds,
-                "specific_img_details": (
-                    response.output_parsed.images[0]
-                    if response.output_parsed.images
-                    else ""
-                ),
+                "current_img_descriptor": (response.output_parsed.images[0]),
                 "token_usages": [usage],
-                "plan_response": response,
+                "plan_response": response.output_parsed,
             },
         )
     except Exception:
         logger.exception("Error occured during process planning.")
+        raise
 
 
 @dataclass
@@ -146,6 +152,7 @@ class ImgGenResponse:
 async def google_img_gen(
     model: str, prompt: str, result_path: Path, image_path: Path
 ) -> ImgGenResponse:
+    """Generate image with Google model."""
     img = Image.open(image_path)
     async with google_semaphore:
         t0 = time.perf_counter()
@@ -156,6 +163,7 @@ async def google_img_gen(
         img_gen_seconds = time.perf_counter() - t0
         logger.info(f"Image was generated with '{model}'. Duration: {img_gen_seconds}s")
     usage = UsageMetadata.from_google_usage(model, response.usage_metadata)
+    img_base64: str = None
     for part in response.parts:
         if part.text:
             text_path = result_path / f"{model}.txt"
@@ -172,6 +180,7 @@ async def google_img_gen(
 async def openai_img_gen(
     model: str, prompt: str, result_path: Path, image_path: Path
 ) -> ImgGenResponse:
+    """Generate image with OpenAI model."""
     async with openai_semaphore:
         t0 = time.perf_counter()
         response = await openai_client.images.edit(
@@ -198,10 +207,11 @@ async def image_gen(state: GraphState, gen_mode: Literal["init", "later"]):
             image_path = state["init_image_path"]
             user_prompt = state["enhanced_prompt"]
 
+        current_img_descriptor = state["current_img_descriptor"]
         prompt = await render_template_async(
             "img_gen.jinja",
             user_prompt=user_prompt,
-            specific_details=state["specific_img_details"],
+            specific_details=current_img_descriptor.description,
         )
         model = state["llm_model"]
         logger.info(f"Image generation with model '{model}' was started.")
@@ -223,14 +233,15 @@ async def image_gen(state: GraphState, gen_mode: Literal["init", "later"]):
             raise NotImplementedError(f"Model '{model}' is not supported.")
 
         result_img_path = (
-            state["result_path"] / f"{standardize_name(model)}_{uuid4()}.png"
+            state["result_path"]
+            / f"{current_img_descriptor.key}_{standardize_name(model)}.png"
         )
         async with aiofiles.open(result_img_path, "wb") as f:
             img_bytes = base64.b64decode(response.img_base64)
             await f.write(img_bytes)
 
         update_dict = {
-            "img_data_url": f"data:image/png;base64,{response.img_base64}",
+            "img_data_url": [f"data:image/png;base64,{response.img_base64}"],
             "token_usages": [response.usage],
             "img_gen_duration_sec": [response.img_gen_seconds],
         }
@@ -238,10 +249,7 @@ async def image_gen(state: GraphState, gen_mode: Literal["init", "later"]):
         if gen_mode == "init":
             update_dict["init_image_path"] = result_img_path
 
-        return Command(
-            goto="eval_image",
-            update=update_dict,
-        )
+        return Command(goto="eval_image", update=update_dict)
     except Exception as e:
         logger.exception(f"Error occured during image generation")
         raise
@@ -250,9 +258,10 @@ async def image_gen(state: GraphState, gen_mode: Literal["init", "later"]):
 async def eval_image(state: GraphState):
     """Evaluate image."""
     try:
-        prompt = await render_template_async(
-            "img_judge.jinja", user_prompt=state["enhanced_prompt"]
-        )
+        img_data_url = state["img_data_url"][-1]
+        current_img_descriptor = state["current_img_descriptor"]
+        user_prompt = f"{state["enhanced_prompt"]}\n{current_img_descriptor}"
+        prompt = await render_template_async("img_judge.jinja", user_prompt=user_prompt)
         async with openai_semaphore:
             t0 = time.perf_counter()
             response = await openai_client.responses.parse(
@@ -263,7 +272,10 @@ async def eval_image(state: GraphState):
                         "role": "user",
                         "content": [
                             {"type": "input_text", "text": prompt},
-                            {"type": "input_image", "image_url": state["img_data_url"]},
+                            {
+                                "type": "input_image",
+                                "image_url": img_data_url,
+                            },
                         ],
                     }
                 ],
@@ -273,16 +285,18 @@ async def eval_image(state: GraphState):
             usage = UsageMetadata.from_openai_usage(EVAL_MODEL, response.usage)
         return Command(
             update={
-                "eval_responses": [response],
+                "eval_responses": [response.output_parsed],
                 "img_eval_duration_sec": [img_eval_seconds],
                 "token_usages": [usage],
             }
         )
     except Exception:
         logger.exception("Error occured during LLM judgement.")
+        raise
 
 
 def group_usages(usages: list[UsageMetadata]) -> dict[str, list[UsageMetadata]]:
+    """Group usages by model name."""
     groups = defaultdict(list)
     for usage in usages:
         groups[usage.model].append(usage)
@@ -290,6 +304,7 @@ def group_usages(usages: list[UsageMetadata]) -> dict[str, list[UsageMetadata]]:
 
 
 def compound_usages(usages: list[UsageMetadata]) -> list[UsageMetadata]:
+    """Compund usages by model name."""
     groups = group_usages(usages)
     return [
         UsageMetadata(
@@ -320,34 +335,49 @@ async def finalize(state: GraphState):
 
 
 async def init_image_gen(state: GraphState):
+    """Initial reference image generation."""
     return await image_gen(state, "init")
 
 
 async def later_image_gen(state: GraphState):
+    """Image generation node for the rest of image descriptors without the first one.."""
     return await image_gen(state, "later")
 
 
+async def gate(state: GraphState):
+    """Gate node that is executed for every eval image node except for the final one."""
+    logger.info(
+        f"Length of eval responses: {len(state["eval_responses"])}, length of image descriptor: {len(state["image_descriptors"])}"
+    )
+    if len(state["eval_responses"]) == len(state["image_descriptors"]):
+        return Command(goto="finalize")
+
+    return state
+
+
 def build_graph():
+    """Build graph for interrier generation."""
     graph_builder = StateGraph(GraphState)
     graph_builder.add_node("plan", plan)
     graph_builder.add_node("init_image_gen", init_image_gen)
     graph_builder.add_node("later_image_gen", later_image_gen)
     graph_builder.add_node("eval_image", eval_image)
+    graph_builder.add_node("gate", gate)
     graph_builder.add_node("finalize", finalize)
 
     graph_builder.add_edge(START, "plan")
     graph_builder.add_edge("plan", "init_image_gen")
 
     def fanout_after_init(state: GraphState):
-        sends = [Send("eval_image", {})]
-        if len(state["images"]) > 1:
+        sends = [Send("eval_image", state)]
+        if len(state["image_descriptors"]) > 1:
             sends.extend(
                 [
                     Send(
                         "later_image_gen",
-                        {"specific_img_details": details},
+                        state | {"current_img_descriptor": descriptor},
                     )
-                    for details in state["images"]
+                    for descriptor in state["image_descriptors"][1:]
                 ]
             )
         return sends
@@ -356,13 +386,7 @@ def build_graph():
         "init_image_gen", fanout_after_init, ["later_image_gen", "eval_image"]
     )
     graph_builder.add_edge("later_image_gen", "eval_image")
-
-    def maybe_finalize(state: GraphState):
-        return (
-            "finalize" if len(state["eval_responses"]) != len(state["images"]) else None
-        )
-
-    graph_builder.add_conditional_edges("eval_image", maybe_finalize, ["finalize"])
+    graph_builder.add_edge("eval_image", "gate")
     graph_builder.add_edge("finalize", END)
 
     graph = graph_builder.compile()
