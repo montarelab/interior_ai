@@ -4,15 +4,15 @@ import logging
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
 from uuid import uuid4
 
 import aiofiles
-from fastapi import Depends, FastAPI, File, Form, UploadFile
+import uvicorn
+from fastapi import Body, FastAPI, File, Form, UploadFile
 
-from src.graph import build_graph
+from src.graph import build_graph, init_graph_state
 from src.models import EvalConfigPayload
-from src.service import ImageGenPipelineClient
+from src.settings import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,8 +20,6 @@ logger = logging.getLogger(__name__)
 DATASET_PATH = Path("dataset")
 
 app = FastAPI()
-
-image_gen_pipeline_service = ImageGenPipelineClient()
 
 bg_tasks_list: list[asyncio.Task] = []
 bg_tasks_lock = threading.Lock()
@@ -33,22 +31,13 @@ def remove_done_task(task: asyncio.Task):
         bg_tasks_list.remove(task)
 
 
-def get_img_pipeline_service():
-    """Dependency injection method to retrieve an instance of ImageGenPipelineClient."""
-    global image_gen_pipeline_service
-    return image_gen_pipeline_service
-
-
-ImageGenPipelineDep = Annotated[
-    "ImageGenPipelineClient", Depends(get_img_pipeline_service)
-]
-
-
 def get_prompt_path(task: str, prompt_version: int) -> Path:
+    """Get prompt path of dataset for evaluation."""
     return DATASET_PATH / task / f"prompt_v{prompt_version}.md"
 
 
 def get_image_path(task: str) -> Path:
+    """Get image path of dataset for evaluation."""
     return DATASET_PATH / task / "image.png"
 
 
@@ -70,8 +59,8 @@ async def generate(prompt: str = Form(None), image: UploadFile = File(...)):
 
         contents = await image.read()
         suffix = image.filename.split(".")[-1]
-        src_img_path = job_path / f"source_img.{suffix}"
-        async with aiofiles.open(src_img_path, "wb") as f:
+        user_image_path = job_path / f"source_img.{suffix}"
+        async with aiofiles.open(user_image_path, "wb") as f:
             await f.write(contents)
 
         async with aiofiles.open(job_path / "user_prompt.md", "w") as f:
@@ -79,24 +68,16 @@ async def generate(prompt: str = Form(None), image: UploadFile = File(...)):
 
         logger.info(f"Saved request details.")
 
-        result_dir_path = job_path / "result"
-        result_dir_path.mkdir(parents=True, exist_ok=True)
+        result_path = job_path / "result"
+        result_path.mkdir(parents=True, exist_ok=True)
 
         graph = build_graph()
-        response = await graph.ainvoke(
-            input={
-                "user_prompt": prompt,
-                "user_image_path": src_img_path,
-                "result_path": result_dir_path,
-                "llm_model": "gpt-image-1-mini",
-                "image_descriptors": [],
-                "img_gen_duration_sec": [],
-                "img_eval_duration_sec": [],
-                "token_usages": [],
-                "eval_responses": [],
-                "img_data_url": [],
-            }
+        init_state = init_graph_state(
+            prompt=prompt,
+            user_image_path=user_image_path,
+            result_path=result_path,
         )
+        response = await graph.ainvoke(input=init_state)
         return {"status": "success", "job_path": job_path.expanduser().resolve()}
     except Exception:
         logger.exception(f"Error during generate request.")
@@ -104,6 +85,7 @@ async def generate(prompt: str = Form(None), image: UploadFile = File(...)):
 
 
 async def run_eval(job_path: Path, tasks: list[asyncio.Task]):
+    """Run evaluation of asyncio generation tasks."""
     results = await asyncio.gather(*tasks)
     exceptions = [r for r in results if isinstance(r, Exception)]
     if not exceptions:
@@ -117,7 +99,9 @@ async def run_eval(job_path: Path, tasks: list[asyncio.Task]):
 
 
 @app.post("/evaluate")
-async def evaluate(pipeline: ImageGenPipelineDep, payload: EvalConfigPayload):
+async def evaluate(
+    payload: EvalConfigPayload = Body(default_factory=EvalConfigPayload),
+):
     """Evaluate POST endpoint. Takes evaluation details and works asynchronously."""
     try:
         logger.info(
@@ -139,21 +123,22 @@ async def evaluate(pipeline: ImageGenPipelineDep, payload: EvalConfigPayload):
 
         for item in product:
             model, task, version = item[0], item[1], item[2]
+            image_path = get_image_path(task)
             prompt_path = get_prompt_path(task, version)
-            user_prompt = prompt_path.read_text(encoding="utf-8")
-            result_dir_path = job_path / f"{task}_v{version}"
-            result_dir_path.mkdir(exist_ok=True, parents=True)
+            prompt = prompt_path.read_text(encoding="utf-8")
 
-            tasks.append(
-                asyncio.create_task(
-                    pipeline.handle_image(
-                        model=model,
-                        user_prompt=user_prompt,
-                        image_path=get_image_path(task),
-                        result_dir_path=result_dir_path,
-                    )
-                )
+            result_path = job_path / f"{task}_v{version}"
+            result_path.mkdir(exist_ok=True, parents=True)
+
+            graph = build_graph()
+            init_state = init_graph_state(
+                prompt=prompt,
+                result_path=result_path,
+                llm_model=model,
+                user_image_path=image_path,
             )
+            task = asyncio.create_task(graph.ainvoke(input=init_state))
+            tasks.append(task)
 
         bg_task = asyncio.create_task(run_eval(job_path=job_path, tasks=tasks))
         bg_task.add_done_callback(remove_done_task)
@@ -167,3 +152,7 @@ async def evaluate(pipeline: ImageGenPipelineDep, payload: EvalConfigPayload):
     except Exception:
         logger.exception(f"Error during generate request.")
         return {"status": "failed"}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host=settings.HOST, port=settings.PORT)

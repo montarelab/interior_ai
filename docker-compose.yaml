@@ -1,0 +1,12 @@
+services:
+  interier_gen:
+    container_name: interier_gen
+    build: .
+    image: interier_gen:latest
+    env_file: .env
+    environment:
+      - HOST=localhost
+      - PORT=5000
+    volumes:
+      - ./jobs:/app/jobs
+    restart: no

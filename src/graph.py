@@ -9,7 +9,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal, TypedDict
-from uuid import uuid4
 
 import aiofiles
 from google import genai
@@ -34,6 +33,7 @@ SEMAPHORE_VAL = 5
 PROMPTS_PATH = Path("prompts")
 EVAL_MODEL = "gpt-5-mini"
 PLAN_MODEL = "gpt-5-mini"
+DEFAULT_IMG_GEN_MODEL = "gpt-image-1-mini"
 
 env = Environment(loader=FileSystemLoader("prompts"))
 openai_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
@@ -67,6 +67,28 @@ class GraphState(TypedDict):
     eval_responses: Annotated[list[ImageEvalResponse], operator.add]
     current_img_descriptor: ImageDescriptor
     img_data_url: Annotated[list[str], operator.add]
+
+
+DEFAULT_GRAPH_STATE = {
+    "image_descriptors": [],
+    "img_gen_duration_sec": [],
+    "img_eval_duration_sec": [],
+    "token_usages": [],
+    "eval_responses": [],
+    "img_data_url": [],
+}
+
+
+def init_graph_state(
+    prompt: str, user_image_path: Path, result_path: Path, llm_model: str | None = None
+) -> GraphState:
+    llm_model = llm_model if llm_model else DEFAULT_IMG_GEN_MODEL
+    return DEFAULT_GRAPH_STATE | {
+        "user_prompt": prompt,
+        "user_image_path": user_image_path,
+        "result_path": result_path,
+        "llm_model": llm_model,
+    }
 
 
 async def img_path_to_data_url(img_path: Path) -> str:
@@ -177,9 +199,7 @@ async def google_img_gen(
     )
 
 
-async def openai_img_gen(
-    model: str, prompt: str, result_path: Path, image_path: Path
-) -> ImgGenResponse:
+async def openai_img_gen(model: str, prompt: str, image_path: Path) -> ImgGenResponse:
     """Generate image with OpenAI model."""
     async with openai_semaphore:
         t0 = time.perf_counter()
@@ -224,10 +244,7 @@ async def image_gen(state: GraphState, gen_mode: Literal["init", "later"]):
             )
         elif "gpt" in model:
             response = await openai_img_gen(
-                model=model,
-                prompt=prompt,
-                result_path=state["result_path"],
-                image_path=image_path,
+                model=model, prompt=prompt, image_path=image_path
             )
         else:
             raise NotImplementedError(f"Model '{model}' is not supported.")

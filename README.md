@@ -29,3 +29,15 @@ or
 ```
 bash run.sh
 ```
+
+
+Build Docker Container
+```
+docker compose build
+```
+
+Run Docker Compose
+
+```
+docker compose run 
+```

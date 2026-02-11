@@ -11,22 +11,22 @@ class EvalConfigPayload(BaseModel):
 
     model_names: list[str] = Field(
         default_factory=lambda: [
-            "gpt-image-1.5",
             "gpt-image-1-mini",
             "gemini-2.5-flash-image",
-            "gemini-3-pro-image-preview",
+            # "gpt-image-1.5",
+            # "gemini-3-pro-image-preview",
         ]
     )
     tasks: list[str] = Field(
         default_factory=lambda: [
             "1_modern_minimalist",
             "2_industrial_loft",
-            "3_japandi_zen",
-            "4_tech_savvy",
-            "5_warm_mediterranean",
+            # "3_japandi_zen",
+            # "4_tech_savvy",
+            # "5_warm_mediterranean",
         ]
     )
-    versions: list[int] = Field(default_factory=lambda: [1, 3])
+    versions: list[int] = Field(default_factory=lambda: [1])
 
 
 class StructuredMetric(BaseModel):
