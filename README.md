@@ -91,12 +91,12 @@ Currently, all application logs with **INFO level** are outputed to **STDOUT**. 
 
 1. Clone **Git** repo:
     ```
-    git clone git@github.com:montarelab/interior_ai.git
+    git clone git@github.com:montarelab/interier_ai.git
     ```
 
 2. Open the folder:
     ```
-    cd interior_ai
+    cd interier_ai
     ```
 
 3. Install packages:
